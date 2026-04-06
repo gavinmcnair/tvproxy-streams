@@ -135,6 +135,17 @@ func countType(items []MediaItem, t MediaType) int {
 	return n
 }
 
+func cleanTitle(name string) string {
+	name = strings.NewReplacer(".", " ", "_", " ").Replace(name)
+	for _, suffix := range []string{"720p", "1080p", "2160p", "4k", "480p", "bluray", "webrip", "web-dl", "web dl", "hdtv", "x264", "x265", "h264", "h265", "aac", "ac3", "brrip", "dvdrip"} {
+		idx := strings.Index(strings.ToLower(name), suffix)
+		if idx > 0 {
+			name = strings.TrimSpace(name[:idx])
+		}
+	}
+	return strings.TrimSpace(name)
+}
+
 func isVideo(name string) bool {
 	ext := strings.ToLower(filepath.Ext(name))
 	switch ext {
@@ -152,7 +163,7 @@ func scanMovies(dir string, items *[]MediaItem) {
 	for _, e := range entries {
 		if !e.IsDir() {
 			if isVideo(e.Name()) {
-				name := strings.TrimSuffix(e.Name(), filepath.Ext(e.Name()))
+				name := cleanTitle(strings.TrimSuffix(e.Name(), filepath.Ext(e.Name())))
 				*items = append(*items, MediaItem{
 					Type:     TypeMovie,
 					Path:     filepath.Join("movies", e.Name()),
@@ -202,8 +213,14 @@ func scanTV(dir string, items *[]MediaItem) {
 				if ep.IsDir() || !isVideo(ep.Name()) {
 					continue
 				}
-				epNum := parseEpisodeNum(ep.Name())
-				epName := strings.TrimSuffix(ep.Name(), filepath.Ext(ep.Name()))
+				fileSeason, epNum, epTitle := parseEpisodeInfo(ep.Name())
+				if fileSeason > 0 && seasonNum == 0 {
+					seasonNum = fileSeason
+				}
+				epName := epTitle
+				if epName == "" {
+					epName = strings.TrimSuffix(ep.Name(), filepath.Ext(ep.Name()))
+				}
 				*items = append(*items, MediaItem{
 					Type:     TypeSeries,
 					Path:     filepath.Join("tv", seriesName, sea.Name(), ep.Name()),
@@ -247,40 +264,112 @@ func scanOther(dir string, items *[]MediaItem) {
 }
 
 func parseSeasonNum(name string) int {
-	name = strings.ToLower(name)
-	name = strings.TrimPrefix(name, "season ")
-	name = strings.TrimPrefix(name, "season")
-	name = strings.TrimPrefix(name, "s")
-	name = strings.TrimSpace(name)
+	lower := strings.ToLower(strings.TrimSpace(name))
 	var n int
-	fmt.Sscanf(name, "%d", &n)
+	for _, pattern := range []string{
+		"season %d", "season%d", "s%d", "series %d", "series%d",
+	} {
+		if _, err := fmt.Sscanf(lower, pattern, &n); err == nil && n > 0 {
+			return n
+		}
+	}
+	fmt.Sscanf(lower, "%d", &n)
 	return n
 }
 
-func parseEpisodeNum(name string) int {
-	lower := strings.ToLower(name)
-	patterns := []string{"e%d", "ep%d", "episode %d", "episode%d"}
-	for _, p := range patterns {
-		var n int
-		if _, err := fmt.Sscanf(lower, "s%*de%d", &n); err == nil && n > 0 {
-			return n
+func parseEpisodeInfo(filename string) (season, episode int, title string) {
+	base := strings.TrimSuffix(filename, filepath.Ext(filename))
+	lower := strings.ToLower(base)
+
+	var s, e int
+	if _, err := fmt.Sscanf(lower, "s%de%d", &s, &e); err == nil && s > 0 && e > 0 {
+		season = s
+		episode = e
+		idx := strings.Index(lower, fmt.Sprintf("s%02de%02d", s, e))
+		if idx < 0 {
+			idx = strings.Index(lower, fmt.Sprintf("s%de%d", s, e))
 		}
-		idx := strings.Index(lower, strings.TrimSuffix(p, "%d"))
 		if idx >= 0 {
-			rest := lower[idx:]
-			if _, err := fmt.Sscanf(rest, p, &n); err == nil && n > 0 {
-				return n
+			after := base[idx+len(fmt.Sprintf("s%02de%02d", s, e)):]
+			after = strings.TrimLeft(after, " .-_")
+			after = strings.NewReplacer(".", " ", "_", " ").Replace(after)
+			after = strings.TrimSpace(after)
+			for _, suffix := range []string{"720p", "1080p", "2160p", "4k", "480p", "bluray", "webrip", "web-dl", "hdtv", "x264", "x265", "h264", "h265", "aac", "ac3"} {
+				idx := strings.Index(strings.ToLower(after), suffix)
+				if idx >= 0 {
+					after = strings.TrimSpace(after[:idx])
+				}
+			}
+			if after != "" {
+				title = after
+			}
+		}
+		return
+	}
+
+	for i := 0; i < len(lower)-4; i++ {
+		if lower[i] == 's' && lower[i+1] >= '0' && lower[i+1] <= '9' {
+			rest := lower[i+1:]
+			if _, err := fmt.Sscanf(rest, "%de%d", &s, &e); err == nil && s > 0 && e > 0 {
+				season = s
+				episode = e
+				return
 			}
 		}
 	}
-	var n int
-	for i := 0; i < len(lower); i++ {
+
+	if _, err := fmt.Sscanf(lower, "%dx%d", &s, &e); err == nil && s > 0 && e > 0 {
+		season = s
+		episode = e
+		return
+	}
+	for i := 0; i < len(lower)-2; i++ {
 		if lower[i] >= '0' && lower[i] <= '9' {
-			fmt.Sscanf(lower[i:], "%d", &n)
-			break
+			rest := lower[i:]
+			if _, err := fmt.Sscanf(rest, "%dx%d", &s, &e); err == nil && s > 0 && e > 0 {
+				season = s
+				episode = e
+				return
+			}
 		}
 	}
-	return n
+
+	for _, prefix := range []string{"episode ", "episode", "ep ", "ep", "e"} {
+		idx := strings.Index(lower, prefix)
+		if idx >= 0 {
+			rest := lower[idx+len(prefix):]
+			if _, err := fmt.Sscanf(rest, "%d", &e); err == nil && e > 0 {
+				episode = e
+				afterNum := rest
+				for len(afterNum) > 0 && afterNum[0] >= '0' && afterNum[0] <= '9' {
+					afterNum = afterNum[1:]
+				}
+				afterNum = strings.TrimLeft(afterNum, " .-_")
+				if afterNum != "" {
+					realIdx := idx + len(prefix)
+					for realIdx < len(base) && (base[realIdx] >= '0' && base[realIdx] <= '9') {
+						realIdx++
+					}
+					after := strings.TrimLeft(base[realIdx:], " .-_")
+					after = strings.NewReplacer(".", " ", "_", " ").Replace(after)
+					if after != "" {
+						title = strings.TrimSpace(after)
+					}
+				}
+				return
+			}
+		}
+	}
+
+	for i := 0; i < len(lower); i++ {
+		if lower[i] >= '0' && lower[i] <= '9' {
+			fmt.Sscanf(lower[i:], "%d", &e)
+			episode = e
+			return
+		}
+	}
+
+	return
 }
 
 func (l *Library) loadProbeCache() {
