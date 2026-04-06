@@ -1,3 +1,3 @@
 module github.com/gavinmcnair/tvproxy-streams
 
-go 1.26.1
+go 1.22
