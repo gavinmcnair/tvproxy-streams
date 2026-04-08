@@ -4,7 +4,7 @@ WORKDIR /app
 COPY go.mod ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o tvproxy-streams .
+RUN CGO_ENABLED=0 go build -o tvproxy-streams ./cmd/tvproxy-streams/
 
 FROM alpine:3.19
 RUN apk add --no-cache ffmpeg
