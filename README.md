@@ -94,6 +94,7 @@ http://host:8090/stream/tv/The%20Radio%20Hour/Season%201/S01E01%20-%20Pilot.mkv
 | `GET /api/library?series=Name` | Episodes for a specific series |
 | `GET /api/status` | Library stats and probe progress |
 | `GET /stream/{path}` | Stream a media file |
+| `POST /enroll` | mTLS client enrollment (TLS mode only) |
 
 ## Configuration
 
@@ -105,6 +106,89 @@ Environment variables:
 | `MEDIA_DIR` | `/media` | Root media directory |
 | `BASE_URL` | `http://localhost:PORT` | Public URL for stream links |
 | `PROBE_DIR` | `/data/probes` | Directory for cached ffprobe results |
+| `CONFIG_DIR` | `/config` | Directory for CA, server cert, and enrolled clients |
+| `TLS` | (unset) | Set to `true` to enable mTLS |
+
+## mTLS Enrollment
+
+When tvproxy-streams is exposed over the internet (not colocated with TVProxy), enable mTLS to secure access. Only enrolled clients can access the playlist and streams.
+
+### Enable TLS
+
+```bash
+docker run -d \
+  -p 8090:8090 \
+  -v /path/to/media:/media:ro \
+  -v /path/to/probes:/data/probes \
+  -v /path/to/config:/config \
+  -e TLS=true \
+  -e BASE_URL=https://streams.example.com:8090 \
+  tvproxy-streams
+```
+
+On first start with `TLS=true`, tvproxy-streams generates:
+- `/config/ca.crt` + `/config/ca.key` — Certificate Authority (self-signed, 10-year validity)
+- `/config/server.crt` + `/config/server.key` — Server certificate (signed by CA)
+- `/config/clients.json` — Enrolled client list (initially empty)
+
+### Enroll a TVProxy client
+
+**Step 1:** Generate a one-time enrollment token on the tvproxy-streams server:
+
+```bash
+docker exec tvproxy-streams tvproxy-streams token gavin@home.com
+```
+
+Output:
+```
+Enrollment token for gavin@home.com (expires in 10 minutes):
+  TVP-ENROLL-a8f3c91b2d4e6f70...
+```
+
+**Step 2:** In TVProxy's web UI, go to **M3U Accounts** and create or edit the source:
+- Set the **URL** to your tvproxy-streams HTTPS URL (e.g. `https://streams.example.com:8090/playlist.m3u`)
+- Paste the token into the **Enrollment Token** field
+- Click **Save**
+
+TVProxy calls the `/enroll` endpoint, receives a signed client certificate, and stores it. All future requests to this source use mTLS. The token is consumed and cannot be reused.
+
+**Step 3:** Verify enrollment. The M3U accounts list shows a green checkmark in the **mTLS** column for enrolled sources.
+
+### Manage enrolled clients
+
+```bash
+# List all enrolled clients
+docker exec tvproxy-streams tvproxy-streams clients
+
+# Output:
+# FINGERPRINT                              EMAIL                          ENROLLED
+# sha256:3f8a...c2d1                       gavin@home.com                 2026-04-09 00:15
+# sha256:9b1e...f4a7                       dave@office.com                2026-04-02 14:30
+
+# Revoke a client
+docker exec tvproxy-streams tvproxy-streams revoke gavin@home.com
+# Revoked 1 client certificate(s) for gavin@home.com.
+```
+
+After revocation, the client's existing certificate is immediately rejected. They must re-enroll with a new token to regain access.
+
+### How it works
+
+1. tvproxy-streams generates a self-signed CA on first start
+2. `tvproxy-streams token <email>` creates a one-time token (10-minute TTL)
+3. TVProxy sends the token to `POST /enroll` — tvproxy-streams issues a client certificate signed by its CA
+4. TVProxy stores the cert bundle and uses it for all future HTTPS requests to this source
+5. All endpoints except `/enroll` require a valid client certificate
+6. The `/enroll` endpoint itself does not require a client cert (it validates the token instead)
+
+### Security model
+
+- **Mutual TLS**: Both server and client authenticate via certificates
+- **Self-signed CA**: No external dependencies (Let's Encrypt doesn't work for private mTLS)
+- **One-time tokens**: Enrollment tokens are single-use and time-limited
+- **Per-client certs**: Each TVProxy instance gets its own certificate
+- **Certificate revocation**: Immediate via CLI — revoked certs are rejected on next request
+- **No secrets in transit**: After enrollment, authentication is purely certificate-based
 
 ## Probing
 
@@ -112,8 +196,9 @@ Files are probed in the background using ffprobe. Results are cached in `PROBE_D
 
 ## Docker
 
+### Without TLS (local network)
+
 ```bash
-docker build -t tvproxy-streams .
 docker run -d \
   -p 8090:8090 \
   -v /path/to/media:/media:ro \
@@ -122,10 +207,15 @@ docker run -d \
   tvproxy-streams
 ```
 
-## Planned Improvements
+### With TLS (internet-facing)
 
-- Config-driven scan roots with per-directory type declarations
-- Directory-as-tags: every directory above the content structure becomes a filterable tag
-- Clean group names without type prefixes
-- Per-root type: `movie`, `series`, or `files` (no assumptions, just filename + directory tags)
-- Sort movies by date, series by season/episode order
+```bash
+docker run -d \
+  -p 8090:8090 \
+  -v /path/to/media:/media:ro \
+  -v /path/to/probes:/data/probes \
+  -v /path/to/config:/config \
+  -e TLS=true \
+  -e BASE_URL=https://streams.example.com:8090 \
+  tvproxy-streams
+```
