@@ -129,6 +129,19 @@ func scanMovieDir(rootDir, rootName, dirName string, items *[]MediaItem) {
 	}
 }
 
+func hasSeasonDirs(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() && (ParseSeasonDir(e.Name()) > 0 || IsExtrasDir(e.Name())) {
+			return true
+		}
+	}
+	return false
+}
+
 func scanSeriesRoot(rootDir string, items *[]MediaItem) {
 	seriesDirs, err := os.ReadDir(rootDir)
 	if err != nil {
@@ -143,68 +156,106 @@ func scanSeriesRoot(rootDir string, items *[]MediaItem) {
 		}
 		seriesName := s.Name()
 		seriesDir := filepath.Join(rootDir, seriesName)
-		seasons, _ := os.ReadDir(seriesDir)
 
-		for _, sea := range seasons {
-			if !sea.IsDir() {
-				continue
+		if !hasSeasonDirs(seriesDir) {
+			subDirs, _ := os.ReadDir(seriesDir)
+			isCollection := false
+			for _, sub := range subDirs {
+				if sub.IsDir() && hasSeasonDirs(filepath.Join(seriesDir, sub.Name())) {
+					isCollection = true
+					break
+				}
 			}
-
-			if IsExtrasDir(sea.Name()) {
-				extrasDir := filepath.Join(seriesDir, sea.Name())
-				extrasFiles, _ := os.ReadDir(extrasDir)
-				for epIdx, ef := range extrasFiles {
-					if ef.IsDir() || !IsVideo(ef.Name()) {
+			if isCollection {
+				for _, sub := range subDirs {
+					if !sub.IsDir() {
 						continue
 					}
-					name := CleanTitle(strings.TrimSuffix(ef.Name(), filepath.Ext(ef.Name())))
-					relPath := filepath.Join(seriesName, sea.Name(), ef.Name())
-					*items = append(*items, MediaItem{
-						Type:       TypeSeries,
-						Path:       filepath.Join(rootName, relPath),
-						Name:       name,
-						Group:      seriesName,
-						Series:     seriesName,
-						SeasonName: sea.Name(),
-						Season:     0,
-						Episode:    epIdx + 1,
-						Tags:       []string{sea.Name()},
-						Filename:   ef.Name(),
-					})
+					scanSeriesDir(rootName, filepath.Join(seriesDir, sub.Name()), sub.Name(), seriesName, items)
 				}
 				continue
 			}
+		}
 
-			seasonNum := ParseSeasonDir(sea.Name())
-			seasonDir := filepath.Join(seriesDir, sea.Name())
-			episodes, _ := os.ReadDir(seasonDir)
+		scanSeriesDir(rootName, seriesDir, seriesName, "", items)
+	}
+}
 
-			for _, ep := range episodes {
-				if ep.IsDir() || !IsVideo(ep.Name()) {
+func scanSeriesDir(rootName, seriesDir, seriesName, collectionName string, items *[]MediaItem) {
+	seasons, _ := os.ReadDir(seriesDir)
+
+	dirBase := filepath.Base(seriesDir)
+	for _, sea := range seasons {
+		if !sea.IsDir() {
+			continue
+		}
+
+		if IsExtrasDir(sea.Name()) {
+			extrasDir := filepath.Join(seriesDir, sea.Name())
+			extrasFiles, _ := os.ReadDir(extrasDir)
+			for epIdx, ef := range extrasFiles {
+				if ef.IsDir() || !IsVideo(ef.Name()) {
 					continue
 				}
-				fileSeason, epNum, epTitle := ParseEpisodeFilename(ep.Name())
-				if fileSeason > 0 {
-					seasonNum = fileSeason
+				name := CleanTitle(strings.TrimSuffix(ef.Name(), filepath.Ext(ef.Name())))
+				var relPath string
+				if collectionName != "" {
+					relPath = filepath.Join(collectionName, dirBase, sea.Name(), ef.Name())
+				} else {
+					relPath = filepath.Join(dirBase, sea.Name(), ef.Name())
 				}
-				epName := epTitle
-				if epName == "" {
-					epName = strings.TrimSuffix(ep.Name(), filepath.Ext(ep.Name()))
-				}
-
-				relPath := filepath.Join(seriesName, sea.Name(), ep.Name())
 				*items = append(*items, MediaItem{
-					Type:     TypeSeries,
-					Path:     filepath.Join(rootName, relPath),
-					Name:     epName,
-					Group:    seriesName,
-					Series:   seriesName,
-					Season:   seasonNum,
-					Episode:  epNum,
-					Tags:     ExtractTags(relPath, TypeSeries),
-					Filename: ep.Name(),
+					Type:       TypeSeries,
+					Path:       filepath.Join(rootName, relPath),
+					Name:       name,
+					Group:      seriesName,
+					Series:     seriesName,
+					Collection: collectionName,
+					SeasonName: sea.Name(),
+					Season:     0,
+					Episode:    epIdx + 1,
+					Tags:       []string{sea.Name()},
+					Filename:   ef.Name(),
 				})
 			}
+			continue
+		}
+
+		seasonNum := ParseSeasonDir(sea.Name())
+		seasonDir := filepath.Join(seriesDir, sea.Name())
+		episodes, _ := os.ReadDir(seasonDir)
+
+		for _, ep := range episodes {
+			if ep.IsDir() || !IsVideo(ep.Name()) {
+				continue
+			}
+			fileSeason, epNum, epTitle := ParseEpisodeFilename(ep.Name())
+			if fileSeason > 0 {
+				seasonNum = fileSeason
+			}
+			epName := epTitle
+			if epName == "" {
+				epName = strings.TrimSuffix(ep.Name(), filepath.Ext(ep.Name()))
+			}
+
+			var relPath string
+			if collectionName != "" {
+				relPath = filepath.Join(collectionName, dirBase, sea.Name(), ep.Name())
+			} else {
+				relPath = filepath.Join(dirBase, sea.Name(), ep.Name())
+			}
+			*items = append(*items, MediaItem{
+				Type:       TypeSeries,
+				Path:       filepath.Join(rootName, relPath),
+				Name:       epName,
+				Group:      seriesName,
+				Series:     seriesName,
+				Collection: collectionName,
+				Season:     seasonNum,
+				Episode:    epNum,
+				Tags:       ExtractTags(relPath, TypeSeries),
+				Filename:   ep.Name(),
+			})
 		}
 	}
 }
