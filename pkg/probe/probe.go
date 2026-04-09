@@ -2,6 +2,7 @@ package probe
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -16,15 +17,29 @@ import (
 	"github.com/gavinmcnair/tvproxy-streams/pkg/scanner"
 )
 
+func PathHash(path string) string {
+	h := sha256.Sum256([]byte(path))
+	return fmt.Sprintf("%x", h)[:16]
+}
+
+type AudioTrack struct {
+	Codec    string `json:"codec"`
+	Layout   string `json:"layout,omitempty"`
+	Language string `json:"language,omitempty"`
+	Channels int    `json:"channels,omitempty"`
+}
+
 type Info struct {
-	VideoCodec  string  `json:"video_codec,omitempty"`
-	AudioCodec  string  `json:"audio_codec,omitempty"`
-	Resolution  string  `json:"resolution,omitempty"`
-	Width       int     `json:"width,omitempty"`
-	Height      int     `json:"height,omitempty"`
-	Duration    float64 `json:"duration,omitempty"`
-	AudioLayout string  `json:"audio_layout,omitempty"`
-	ProbedAt    string  `json:"probed_at,omitempty"`
+	VideoCodec  string       `json:"video_codec,omitempty"`
+	AudioCodec  string       `json:"audio_codec,omitempty"`
+	Resolution  string       `json:"resolution,omitempty"`
+	Width       int          `json:"width,omitempty"`
+	Height      int          `json:"height,omitempty"`
+	Duration    float64      `json:"duration,omitempty"`
+	AudioLayout string       `json:"audio_layout,omitempty"`
+	AudioTracks []AudioTrack `json:"audio_tracks,omitempty"`
+	Container   string       `json:"container,omitempty"`
+	ProbedAt    string       `json:"probed_at,omitempty"`
 }
 
 type Cache struct {
@@ -142,17 +157,19 @@ type ffprobeOutput struct {
 }
 
 type ffprobeStream struct {
-	CodecType     string `json:"codec_type"`
-	CodecName     string `json:"codec_name"`
-	Width         int    `json:"width"`
-	Height        int    `json:"height"`
-	Channels      int    `json:"channels"`
-	ChannelLayout string `json:"channel_layout"`
-	Profile       string `json:"profile"`
+	CodecType     string            `json:"codec_type"`
+	CodecName     string            `json:"codec_name"`
+	Width         int               `json:"width"`
+	Height        int               `json:"height"`
+	Channels      int               `json:"channels"`
+	ChannelLayout string            `json:"channel_layout"`
+	Profile       string            `json:"profile"`
+	Tags          map[string]string `json:"tags"`
 }
 
 type ffprobeFormat struct {
-	Duration string `json:"duration"`
+	Duration   string `json:"duration"`
+	FormatName string `json:"format_name"`
 }
 
 func FFProbe(path string) *Info {
@@ -179,15 +196,29 @@ func FFProbe(path string) *Info {
 			info.Height = s.Height
 			info.Resolution = classifyResolution(s.Width, s.Height)
 		}
-		if s.CodecType == "audio" && info.AudioCodec == "" {
-			info.AudioCodec = normalizeAudioCodec(s.CodecName)
-			info.AudioLayout = classifyAudioLayout(s.Channels, s.ChannelLayout, s.CodecName, s.Profile)
+		if s.CodecType == "audio" {
+			track := AudioTrack{
+				Codec:    normalizeAudioCodec(s.CodecName),
+				Layout:   classifyAudioLayout(s.Channels, s.ChannelLayout, s.CodecName, s.Profile),
+				Channels: s.Channels,
+			}
+			if lang, ok := s.Tags["language"]; ok && lang != "" && lang != "und" {
+				track.Language = lang
+			}
+			info.AudioTracks = append(info.AudioTracks, track)
+			if info.AudioCodec == "" {
+				info.AudioCodec = track.Codec
+				info.AudioLayout = track.Layout
+			}
 		}
 	}
 	if result.Format.Duration != "" {
 		if d, err := strconv.ParseFloat(result.Format.Duration, 64); err == nil {
 			info.Duration = d
 		}
+	}
+	if result.Format.FormatName != "" {
+		info.Container = normalizeContainer(result.Format.FormatName)
 	}
 	return info
 }
@@ -235,6 +266,23 @@ func normalizeAudioCodec(codec string) string {
 		return "Vorbis"
 	default:
 		return strings.ToUpper(codec)
+	}
+}
+
+func normalizeContainer(format string) string {
+	parts := strings.Split(format, ",")
+	f := strings.TrimSpace(parts[0])
+	switch f {
+	case "matroska", "webm":
+		return "matroska"
+	case "mov", "mp4", "m4a", "3gp", "3g2", "mj2":
+		return "mp4"
+	case "mpegts":
+		return "mpegts"
+	case "avi":
+		return "avi"
+	default:
+		return f
 	}
 }
 

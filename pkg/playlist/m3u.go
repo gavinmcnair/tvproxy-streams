@@ -20,6 +20,7 @@ func ServeM3U(items []scanner.MediaItem, probeCache *probe.Cache, baseURL string
 		streamURL := baseURL + "/stream/" + url.PathEscape(item.Path)
 
 		var tags []string
+		tags = append(tags, fmt.Sprintf(`tvp-id="%s"`, probe.PathHash(item.Path)))
 		tags = append(tags, fmt.Sprintf(`tvg-name="%s"`, item.Name))
 		tags = append(tags, fmt.Sprintf(`tvp-type="%s"`, item.Type))
 
@@ -66,6 +67,23 @@ func ServeM3U(items []scanner.MediaItem, probeCache *probe.Cache, baseURL string
 			}
 			if p.Duration > 0 {
 				tags = append(tags, fmt.Sprintf(`tvp-duration="%.0f"`, p.Duration))
+			}
+			if p.Container != "" {
+				tags = append(tags, fmt.Sprintf(`tvp-container="%s"`, p.Container))
+			}
+			if len(p.AudioTracks) > 1 {
+				var trackParts []string
+				for _, t := range p.AudioTracks {
+					part := t.Codec
+					if t.Language != "" {
+						part += ":" + t.Language
+					}
+					if t.Layout != "" {
+						part += ":" + t.Layout
+					}
+					trackParts = append(trackParts, part)
+				}
+				tags = append(tags, fmt.Sprintf(`tvp-audio-tracks="%s"`, strings.Join(trackParts, ",")))
 			}
 		}
 
