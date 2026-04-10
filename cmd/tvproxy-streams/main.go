@@ -224,17 +224,26 @@ func runServer(configDir string) {
 
 	go probeCache.ProbeWorker(ctx, roots, lib.Items)
 
-	rescanTicker := time.NewTicker(5 * time.Minute)
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-rescanTicker.C:
-				lib.Scan()
+	fsWatcher, err := scanner.NewWatcher(roots, 2*time.Second, func() {
+		lib.Scan()
+	})
+	if err != nil {
+		log.Printf("filesystem watcher failed, falling back to 5-minute poll: %v", err)
+		rescanTicker := time.NewTicker(5 * time.Minute)
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-rescanTicker.C:
+					lib.Scan()
+				}
 			}
-		}
-	}()
+		}()
+	} else {
+		log.Println("filesystem watcher active")
+		go fsWatcher.Run(ctx.Done())
+	}
 
 	mux := http.NewServeMux()
 
