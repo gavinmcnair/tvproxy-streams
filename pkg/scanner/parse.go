@@ -58,8 +58,28 @@ func ParseSeasonDir(name string) int {
 			return n
 		}
 	}
+	if idx := strings.Index(lower, "season "); idx >= 0 {
+		if _, err := fmt.Sscanf(lower[idx:], "season %d", &n); err == nil && n > 0 {
+			return n
+		}
+	}
+	if idx := strings.Index(lower, "season"); idx >= 0 {
+		if _, err := fmt.Sscanf(lower[idx:], "season%d", &n); err == nil && n > 0 {
+			return n
+		}
+	}
 	fmt.Sscanf(lower, "%d", &n)
 	return n
+}
+
+func ExtractSeriesFromSeasonDir(name string) string {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	for _, keyword := range []string{" season ", " season", " s0", " s1", " s2", " s3", " s4", " s5", " s6", " s7", " s8", " s9"} {
+		if idx := strings.Index(lower, keyword); idx > 0 {
+			return strings.TrimSpace(name[:idx])
+		}
+	}
+	return ""
 }
 
 func ParseEpisodeFilename(filename string) (season, episode int, title string) {

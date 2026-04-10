@@ -54,6 +54,9 @@ func TestParseSeasonDir(t *testing.T) {
 		{"Series 2", 2},
 		{"1", 1},
 		{"03", 3},
+		{"Downton Abbey Season 1", 1},
+		{"Downton Abbey Season 6", 6},
+		{"Show Name Season 12", 12},
 		{"Random Name", 0},
 	}
 	for _, tt := range tests {
