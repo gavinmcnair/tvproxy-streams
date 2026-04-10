@@ -81,6 +81,9 @@ http://host:8090/stream/tv/The%20Radio%20Hour/Season%201/S01E01%20-%20Pilot.mkv
 | `tvp-resolution` | Resolution e.g. `1080p` (from probe) |
 | `tvp-audio` | Audio layout e.g. `5.1` (from probe) |
 | `tvp-duration` | Duration in seconds (from probe) |
+| `tvp-container` | Container format e.g. `matroska`, `mp4` (from probe) |
+| `tvp-audio-tracks` | All audio tracks: `codec:lang:layout,...` (from probe) |
+| `tvp-id` | Deterministic ID (sha256 hash of path, 16 chars) |
 
 ## API
 
@@ -136,12 +139,12 @@ On first start with `TLS=true`, tvproxy-streams generates:
 **Step 1:** Generate a one-time enrollment token on the tvproxy-streams server:
 
 ```bash
-docker exec tvproxy-streams tvproxy-streams token gavin@home.com
+docker exec tvproxy-streams tvproxy-streams token user@home.local
 ```
 
 Output:
 ```
-Enrollment token for gavin@home.com (expires in 10 minutes):
+Enrollment token for user@home.local (expires in 10 minutes):
   TVP-ENROLL-a8f3c91b2d4e6f70...
 ```
 
@@ -162,12 +165,12 @@ docker exec tvproxy-streams tvproxy-streams clients
 
 # Output:
 # FINGERPRINT                              EMAIL                          ENROLLED
-# sha256:3f8a...c2d1                       gavin@home.com                 2026-04-09 00:15
-# sha256:9b1e...f4a7                       dave@office.com                2026-04-02 14:30
+# sha256:3f8a...c2d1                       user@home.local                 2026-04-09 00:15
+# sha256:9b1e...f4a7                       user2@office.local                2026-04-02 14:30
 
 # Revoke a client
-docker exec tvproxy-streams tvproxy-streams revoke gavin@home.com
-# Revoked 1 client certificate(s) for gavin@home.com.
+docker exec tvproxy-streams tvproxy-streams revoke user@home.local
+# Revoked 1 client certificate(s) for user@home.local.
 ```
 
 After revocation, the client's existing certificate is immediately rejected. They must re-enroll with a new token to regain access.
@@ -190,9 +193,17 @@ After revocation, the client's existing certificate is immediately rejected. The
 - **Certificate revocation**: Immediate via CLI — revoked certs are rejected on next request
 - **No secrets in transit**: After enrollment, authentication is purely certificate-based
 
+## Filesystem Watching
+
+The library watches all directories under scan roots using filesystem notifications (inotify/kqueue). Changes are debounced (2 seconds) to batch rapid operations like copying a full season. New directories are automatically watched.
+
+Falls back to 5-minute polling on filesystems that don't support inotify (e.g. some NFS mounts).
+
 ## Probing
 
-Files are probed in the background using ffprobe. Results are cached in `PROBE_DIR` as JSON files. Probe data is included in the M3U output as `tvp-*` tags. The library rescans every 5 minutes.
+Files are probed in the background using ffprobe (one file every 5 seconds). Results are cached in `PROBE_DIR` as JSON files and included in the M3U output as `tvp-*` tags. TVProxy reads these tags during M3U refresh and generates probe.json for each stream — no probing needed at playback time.
+
+Probe data includes all audio tracks with codec, language, and channel layout, plus container format detection.
 
 ## Docker
 
